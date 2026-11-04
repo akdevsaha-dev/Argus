@@ -4,6 +4,9 @@
   "description": "> An AI coding agent that lives in your terminal.",
   "main": "index.js",
   "scripts": {
+    "dev": "tsx src/cli.tsx",
+    "build": "tsc",
+    "start": "node dist/cli.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "bin": {
@@ -12,7 +15,7 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
+  "type": "module",
   "dependencies": {
     "dotenv": "^18.0.9",
     "ink": "^8.0.0",
