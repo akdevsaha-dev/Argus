@@ -1,5 +1,5 @@
 import React, { useRef, useState } from "react";
-import { Box, Static, useApp, useInput, useStdout, useWindowSize } from "ink";
+import { Box, Static, useApp, useInput, useStdout } from "ink";
 import Banner from "./components/Banner.js";
 import Message, { type ChatMessage } from "./components/Message.js";
 import Thinking from "./components/Thinking.js";
@@ -15,7 +15,6 @@ type StaticItem = { id: "banner" } | ChatMessage;
 
 export default function App() {
   const { exit } = useApp();
-  const { columns } = useWindowSize();
   const { write } = useStdout();
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -105,7 +104,7 @@ export default function App() {
   const items: StaticItem[] = [{ id: "banner" }, ...messages];
 
   return (
-    <Box flexDirection="column" width={Math.max(1, columns - 1)}>
+    <Box flexDirection="column" paddingX={1}>
       <Static key={`output-${epoch}`} items={items}>
         {(item) => (
           <Box key={item.id} paddingX={1}>
@@ -114,7 +113,6 @@ export default function App() {
         )}
       </Static>
 
-      <Box flexDirection="column" paddingX={1}>
       {isThinking && <Thinking />}
 
       <Prompt
@@ -125,7 +123,6 @@ export default function App() {
         busy={isThinking}
         suggestions={isThinking ? [] : suggestions}
       />
-      </Box>
     </Box>
   );
 }
