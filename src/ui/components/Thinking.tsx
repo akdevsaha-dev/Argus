@@ -24,10 +24,10 @@ function Shimmer({ text, frame }: { text: string; frame: number }) {
   );
 }
 
-export default function Thinking() {
+export default function Thinking({ label }: { label?: string }) {
   const { frame, time } = useAnimation({ interval: 80 });
   const seconds = Math.floor(time / 1000);
-  const verb = VERBS[Math.floor(seconds / 3) % VERBS.length]!;
+  const verb = label ?? VERBS[Math.floor(seconds / 3) % VERBS.length]!;
   const spinnerColor = gradientAt(brandStops, (Math.sin(time / 400) + 1) / 2);
 
   return (

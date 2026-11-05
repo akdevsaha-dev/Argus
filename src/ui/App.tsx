@@ -1,5 +1,6 @@
 import React, { useRef, useState } from "react";
 import { Box, Static, useApp, useInput, useStdout } from "ink";
+import { resetHistory, runAgent } from "../agent/agent.js";
 import Banner from "./components/Banner.js";
 import Message, { type ChatMessage } from "./components/Message.js";
 import Thinking from "./components/Thinking.js";
@@ -9,6 +10,10 @@ const COMMANDS: Command[] = [
   { name: "/help", description: "Show available commands" },
   { name: "/clear", description: "Clear the conversation" },
   { name: "/exit", description: "Quit Argus" },
+  {
+    name: "/reset",
+    description: "Clear conversation history and start a fresh session.",
+  },
 ];
 
 type StaticItem = { id: "banner" } | ChatMessage;
@@ -19,9 +24,10 @@ export default function App() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isThinking, setIsThinking] = useState(false);
+  const [activity, setActivity] = useState<string | null>(null);
   const [epoch, setEpoch] = useState(0);
   const [inputKey, setInputKey] = useState(0);
-  const pending = useRef<NodeJS.Timeout | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const nextId = useRef(0);
 
   const push = (msg: Omit<ChatMessage, "id">) => {
@@ -35,9 +41,10 @@ export default function App() {
       : [];
 
   const interrupt = () => {
-    if (pending.current) clearTimeout(pending.current);
-    pending.current = null;
+    abortRef.current?.abort();
+    abortRef.current = null;
     setIsThinking(false);
+    setActivity(null);
     push({ role: "system", content: "Interrupted." });
   };
 
@@ -56,6 +63,12 @@ export default function App() {
     switch (name) {
       case "/exit":
         exit();
+        break;
+      case "/reset":
+        resetHistory();
+        setMessages([]);
+        setEpoch((e) => e + 1);
+        write("\x1b[2J\x1b[3J\x1b[H");
         break;
       case "/clear":
         write("\x1b[2J\x1b[3J\x1b[H");
@@ -88,17 +101,50 @@ export default function App() {
 
     push({ role: "user", content: trimmed });
     setIsThinking(true);
+    setActivity(null);
 
+    const controller = new AbortController();
+    abortRef.current = controller;
     const startedAt = Date.now();
-    pending.current = setTimeout(() => {
-      pending.current = null;
-      push({
-        role: "assistant",
-        content: `Echoing task: "${trimmed}". Ready to wire up the LLM ReAct loop in Phase 2.`,
-        durationMs: Date.now() - startedAt,
-      });
-      setIsThinking(false);
-    }, 6000);
+
+    void (async () => {
+      try {
+        await runAgent(
+          trimmed,
+          (text) => {
+            setActivity(null);
+            push({ role: "assistant", content: text });
+          },
+          (name) => setActivity(`Using ${name}`),
+          controller.signal,
+        );
+
+        if (controller.signal.aborted) return;
+
+        const durationMs = Date.now() - startedAt;
+        setMessages((prev) => {
+          const next = [...prev];
+          for (let i = next.length - 1; i >= 0; i--) {
+            const message = next[i];
+            if (message?.role === "assistant") {
+              next[i] = { ...message, durationMs };
+              break;
+            }
+          }
+          return next;
+        });
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        const message = error instanceof Error ? error.message : String(error);
+        push({ role: "error", content: message });
+      } finally {
+        if (abortRef.current === controller) {
+          abortRef.current = null;
+          setIsThinking(false);
+          setActivity(null);
+        }
+      }
+    })();
   };
 
   const items: StaticItem[] = [{ id: "banner" }, ...messages];
@@ -113,7 +159,7 @@ export default function App() {
         )}
       </Static>
 
-      {isThinking && <Thinking />}
+      {isThinking && <Thinking label={activity ?? undefined} />}
 
       <Prompt
         key={`prompt-${inputKey}`}
