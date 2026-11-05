@@ -1,117 +1,130 @@
-import React, { useState } from "react";
-import { Box, Text, Static, useInput, useApp } from "ink";
-import TextInput from "ink-text-input";
+import React, { useRef, useState } from "react";
+import { Box, Static, useApp, useInput, useStdout, useWindowSize } from "ink";
+import Banner from "./components/Banner.js";
+import Message, { type ChatMessage } from "./components/Message.js";
+import Thinking from "./components/Thinking.js";
+import Prompt, { type Command } from "./components/Prompt.js";
 
-export interface chatMessage {
-  id: string;
-  role: "user" | "assistant" | "system";
-  content: string;
-}
+const COMMANDS: Command[] = [
+  { name: "/help", description: "Show available commands" },
+  { name: "/clear", description: "Clear the conversation" },
+  { name: "/exit", description: "Quit Argus" },
+];
+
+type StaticItem = { id: "banner" } | ChatMessage;
 
 export default function App() {
   const { exit } = useApp();
+  const { columns } = useWindowSize();
+  const { write } = useStdout();
   const [input, setInput] = useState("");
-  const [messages, setMessages] = useState<chatMessage[]>([
-    {
-      id: "init-1",
-      role: "system",
-      content: `Initialized in ${process.cwd()} — Type a task or /exit to quit.`,
-    },
-  ]);
-  const [isThinking, setisThinking] = useState(false);
-  useInput((inputKey, key) => {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [isThinking, setIsThinking] = useState(false);
+  const [epoch, setEpoch] = useState(0);
+  const [inputKey, setInputKey] = useState(0);
+  const pending = useRef<NodeJS.Timeout | null>(null);
+  const nextId = useRef(0);
+
+  const push = (msg: Omit<ChatMessage, "id">) => {
+    const message: ChatMessage = { ...msg, id: String(nextId.current++) };
+    setMessages((prev) => [...prev, message]);
+  };
+
+  const suggestions =
+    input.startsWith("/") && !input.includes(" ")
+      ? COMMANDS.filter((c) => c.name.startsWith(input))
+      : [];
+
+  const interrupt = () => {
+    if (pending.current) clearTimeout(pending.current);
+    pending.current = null;
+    setIsThinking(false);
+    push({ role: "system", content: "Interrupted." });
+  };
+
+  useInput((_char, key) => {
     if (key.escape) {
-      exit();
+      if (isThinking) interrupt();
+      else if (input) setInput("");
+      else exit();
+    } else if (key.tab && suggestions[0]) {
+      setInput(suggestions[0].name);
+      setInputKey((k) => k + 1);
     }
   });
 
-  const handleSubmit = async (value: string) => {
-    const trimmed = value.trim();
+  const runCommand = (name: string) => {
+    switch (name) {
+      case "/exit":
+        exit();
+        break;
+      case "/clear":
+        write("\x1b[2J\x1b[3J\x1b[H");
+        setMessages([]);
+        setEpoch((e) => e + 1);
+        break;
+      case "/help":
+        push({
+          role: "system",
+          content: COMMANDS.map(
+            (c) => `${c.name.padEnd(8)} ${c.description}`,
+          ).join("\n  "),
+        });
+        break;
+      default:
+        push({ role: "error", content: `Unknown command ${name}. Try /help.` });
+    }
+  };
 
+  const handleSubmit = (value: string) => {
+    const trimmed = value.trim();
     if (!trimmed || isThinking) return;
 
-    if (trimmed == "/exit") {
-      exit();
+    setInput("");
+
+    if (trimmed.startsWith("/")) {
+      runCommand(trimmed.split(/\s+/)[0]!);
       return;
     }
 
-    const userMessage: chatMessage = {
-      id: Date.now().toString(),
-      role: "user",
-      content: trimmed,
-    };
+    push({ role: "user", content: trimmed });
+    setIsThinking(true);
 
-    setMessages((prev) => [...prev, userMessage]);
-    setInput("");
-    setisThinking(true);
-
-    setTimeout(() => {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: (Date.now() + 1).toString(),
-          role: "assistant",
-          content: `Echoing task: "${trimmed}". Ready to wire up the LLM ReAct loop in Phase 2.`,
-        },
-      ]);
-      setisThinking(false);
+    const startedAt = Date.now();
+    pending.current = setTimeout(() => {
+      pending.current = null;
+      push({
+        role: "assistant",
+        content: `Echoing task: "${trimmed}". Ready to wire up the LLM ReAct loop in Phase 2.`,
+        durationMs: Date.now() - startedAt,
+      });
+      setIsThinking(false);
     }, 6000);
   };
 
+  const items: StaticItem[] = [{ id: "banner" }, ...messages];
+
   return (
-    <Box flexDirection="column" padding={1}>
-      {/* completed message flush to native terminal scrollback */}
-      <Static items={messages}>
-        {(msg) => (
-          <Box key={msg.id} flexDirection="column" marginBottom={1}>
-            <Text
-              bold
-              color={
-                msg.role === "user"
-                  ? "cyan"
-                  : msg.role === "assistant"
-                    ? "green"
-                    : "grey"
-              }
-            >
-              {msg.role == "user"
-                ? "❯ you"
-                : msg.role == "assistant"
-                  ? "❯ Agent"
-                  : "'⚙ System'"}
-            </Text>
-            <Box paddingLeft={2}>
-              <Text>{msg.content}</Text>
-            </Box>
+    <Box flexDirection="column" width={Math.max(1, columns - 1)}>
+      <Static key={`output-${epoch}`} items={items}>
+        {(item) => (
+          <Box key={item.id} paddingX={1}>
+            {"role" in item ? <Message message={item} /> : <Banner />}
           </Box>
         )}
       </Static>
-      {isThinking && (
-        <Box marginBottom={1}>
-          <Text color="yellow">⏳ Agent is reasoning...</Text>
-        </Box>
-      )}
 
-      <Box
-        borderStyle="round"
-        borderColor={isThinking ? "gray" : "cyan"}
-        paddingX={1}
-      >
-        <Box marginRight={1}>
-          <Text color="cyan" bold>
-            ❯
-          </Text>
-        </Box>
-        <TextInput
-          value={input}
-          onChange={setInput}
-          onSubmit={handleSubmit}
-          placeholder={
-            isThinking
-              ? "Waiting for agent..."
-              : "Ask the agent to inspect or edit code..."
-          }
-        />
+      <Box flexDirection="column" paddingX={1}>
+      {isThinking && <Thinking />}
+
+      <Prompt
+        key={`prompt-${inputKey}`}
+        value={input}
+        onChange={setInput}
+        onSubmit={handleSubmit}
+        busy={isThinking}
+        suggestions={isThinking ? [] : suggestions}
+      />
       </Box>
     </Box>
   );
