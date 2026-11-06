@@ -34,7 +34,15 @@ export async function runAgent(
       model: "gemini-3.1-flash-lite",
       contents: history,
       config: {
-        systemInstruction: "You are a helpful coding CLI agent. Be concise.",
+        systemInstruction: `
+You are a coding CLI agent working in the current directory.
+When the user asks you to create or modify a file, use edit_file
+to save the changes to disk. Read existing files before editing them.
+Displaying file contents in your reply does not complete a file-writing request.
+Only report that a file was saved after the tool confirms success.
+If a tool fails, fix the issue or clearly report the failure.
+Be concise.
+`,
         tools: tools,
         abortSignal: signal,
       },
@@ -55,7 +63,8 @@ export async function runAgent(
       if (signal?.aborted) return;
 
       const toolName = call.name!;
-      onToolStart(toolName);
+      const argPreview = Object.values(call.args ?? {})[0] ?? "";
+      onToolStart(argPreview ? `${toolName}(${argPreview})` : toolName);
 
       const result = await executeTool(toolName, call.args);
       toolOutputs.push({
