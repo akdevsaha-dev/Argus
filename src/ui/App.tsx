@@ -18,6 +18,20 @@ const COMMANDS: Command[] = [
 
 type StaticItem = { id: "banner" } | ChatMessage;
 
+function addResponseDuration(messages: ChatMessage[], durationMs: number) {
+  const updated = [...messages];
+
+  for (let index = updated.length - 1; index >= 0; index--) {
+    const message = updated[index];
+    if (message?.role === "assistant") {
+      updated[index] = { ...message, durationMs };
+      break;
+    }
+  }
+
+  return updated;
+}
+
 export default function App() {
   const { exit } = useApp();
   const { write } = useStdout();
@@ -25,133 +39,140 @@ export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isThinking, setIsThinking] = useState(false);
   const [activity, setActivity] = useState<string | null>(null);
-  const [epoch, setEpoch] = useState(0);
-  const [inputKey, setInputKey] = useState(0);
-  const abortRef = useRef<AbortController | null>(null);
-  const nextId = useRef(0);
+  const [outputVersion, setOutputVersion] = useState(0);
+  const [promptVersion, setPromptVersion] = useState(0);
+  const activeRequest = useRef<AbortController | null>(null);
+  const nextMessageId = useRef(0);
+  const inputRef = useRef(input);
+  const thinkingRef = useRef(isThinking);
+  inputRef.current = input;
+  thinkingRef.current = isThinking;
 
-  const push = (msg: Omit<ChatMessage, "id">) => {
-    const message: ChatMessage = { ...msg, id: String(nextId.current++) };
-    setMessages((prev) => [...prev, message]);
-  };
+  function addMessage(role: ChatMessage["role"], content: string) {
+    const message: ChatMessage = {
+      id: String(nextMessageId.current++),
+      role,
+      content,
+    };
+    setMessages((previous) => [...previous, message]);
+  }
 
   const suggestions =
     input.startsWith("/") && !input.includes(" ")
-      ? COMMANDS.filter((c) => c.name.startsWith(input))
+      ? COMMANDS.filter((command) => command.name.startsWith(input))
       : [];
 
-  const interrupt = () => {
-    abortRef.current?.abort();
-    abortRef.current = null;
+  function interrupt() {
+    activeRequest.current?.abort();
+    activeRequest.current = null;
     setIsThinking(false);
     setActivity(null);
-    push({ role: "system", content: "Interrupted." });
-  };
+    addMessage("system", "Interrupted.");
+  }
 
-  useInput((_char, key) => {
-    if (key.escape) {
-      if (isThinking) interrupt();
-      else if (input) setInput("");
-      else exit();
-    } else if (key.tab && suggestions[0]) {
-      setInput(suggestions[0].name);
-      setInputKey((k) => k + 1);
-    }
-  });
+  function clearScreen() {
+    write("\x1b[2J\x1b[3J\x1b[H");
+    setMessages([]);
+    setOutputVersion((version) => version + 1);
+  }
 
-  const runCommand = (name: string) => {
+  function runCommand(name: string) {
     switch (name) {
       case "/exit":
         exit();
-        break;
+        return;
       case "/reset":
         resetHistory();
-        setMessages([]);
-        setEpoch((e) => e + 1);
-        write("\x1b[2J\x1b[3J\x1b[H");
-        break;
+        clearScreen();
+        return;
       case "/clear":
-        write("\x1b[2J\x1b[3J\x1b[H");
-        setMessages([]);
-        setEpoch((e) => e + 1);
-        break;
-      case "/help":
-        push({
-          role: "system",
-          content: COMMANDS.map(
-            (c) => `${c.name.padEnd(8)} ${c.description}`,
-          ).join("\n  "),
-        });
-        break;
+        clearScreen();
+        return;
+      case "/help": {
+        const help = COMMANDS.map(
+          (command) => `${command.name.padEnd(8)} ${command.description}`,
+        ).join("\n  ");
+        addMessage("system", help);
+        return;
+      }
       default:
-        push({ role: "error", content: `Unknown command ${name}. Try /help.` });
+        addMessage("error", `Unknown command ${name}. Try /help.`);
     }
-  };
+  }
 
-  const handleSubmit = (value: string) => {
-    const trimmed = value.trim();
-    if (!trimmed || isThinking) return;
-
-    setInput("");
-
-    if (trimmed.startsWith("/")) {
-      runCommand(trimmed.split(/\s+/)[0]!);
-      return;
-    }
-
-    push({ role: "user", content: trimmed });
+  async function sendMessage(text: string) {
+    addMessage("user", text);
     setIsThinking(true);
     setActivity(null);
 
     const controller = new AbortController();
-    abortRef.current = controller;
+    activeRequest.current = controller;
     const startedAt = Date.now();
 
-    void (async () => {
-      try {
-        await runAgent(
-          trimmed,
-          (text) => {
-            setActivity(null);
-            push({ role: "assistant", content: text });
-          },
-          (name) => setActivity(`Using ${name}`),
-          controller.signal,
-        );
-
-        if (controller.signal.aborted) return;
-
-        const durationMs = Date.now() - startedAt;
-        setMessages((prev) => {
-          const next = [...prev];
-          for (let i = next.length - 1; i >= 0; i--) {
-            const message = next[i];
-            if (message?.role === "assistant") {
-              next[i] = { ...message, durationMs };
-              break;
-            }
-          }
-          return next;
-        });
-      } catch (error) {
-        if (controller.signal.aborted) return;
-        const message = error instanceof Error ? error.message : String(error);
-        push({ role: "error", content: message });
-      } finally {
-        if (abortRef.current === controller) {
-          abortRef.current = null;
-          setIsThinking(false);
+    try {
+      await runAgent(
+        text,
+        (reply) => {
           setActivity(null);
-        }
+          addMessage("assistant", reply);
+        },
+        (toolName) => setActivity(`Using ${toolName}`),
+        controller.signal,
+      );
+
+      if (controller.signal.aborted) return;
+
+      const durationMs = Date.now() - startedAt;
+      setMessages((previous) => addResponseDuration(previous, durationMs));
+    } catch (error) {
+      if (controller.signal.aborted) return;
+
+      const message = error instanceof Error ? error.message : String(error);
+      addMessage("error", message);
+    } finally {
+      if (activeRequest.current === controller) {
+        activeRequest.current = null;
+        setIsThinking(false);
+        setActivity(null);
       }
-    })();
-  };
+    }
+  }
+
+  function handleSubmit(value: string) {
+    const text = value.trim();
+    if (!text || isThinking) return;
+
+    setInput("");
+
+    if (text.startsWith("/")) {
+      const command = text.split(/\s+/)[0]!;
+      runCommand(command);
+      return;
+    }
+
+    void sendMessage(text);
+  }
+
+  useInput((_char, key) => {
+    if (key.escape) {
+      if (thinkingRef.current) interrupt();
+      else if (inputRef.current) setInput("");
+      else exit();
+      return;
+    }
+
+    const firstSuggestion = suggestions[0];
+    if (key.tab && firstSuggestion) {
+      setInput(firstSuggestion.name);
+      setPromptVersion((version) => version + 1);
+    }
+  });
 
   const items: StaticItem[] = [{ id: "banner" }, ...messages];
 
   return (
     <Box flexDirection="column" paddingX={1}>
-      <Static key={`output-${epoch}`} items={items}>
+      <Static key={`output-${outputVersion}`} items={items}>
         {(item) => (
           <Box key={item.id} paddingX={1}>
             {"role" in item ? <Message message={item} /> : <Banner />}
@@ -162,7 +183,7 @@ export default function App() {
       {isThinking && <Thinking label={activity ?? undefined} />}
 
       <Prompt
-        key={`prompt-${inputKey}`}
+        key={`prompt-${promptVersion}`}
         value={input}
         onChange={setInput}
         onSubmit={handleSubmit}

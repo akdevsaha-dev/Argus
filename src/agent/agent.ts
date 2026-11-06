@@ -6,7 +6,6 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 const history: Content[] = [];
 
-/** Text parts only. response.text warns on tool calls, and that warning breaks the prompt layout. */
 function replyText(content: Content | undefined): string {
   return (content?.parts ?? [])
     .filter((part) => part.text && !part.thought)
