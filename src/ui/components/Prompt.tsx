@@ -1,6 +1,6 @@
 import React from "react";
 import { Box, Text } from "ink";
-import TextInput from "ink-text-input";
+import TextInput from "./TextInput.js";
 import { theme } from "../theme.js";
 import { terminalContext } from "../../lib/terminal-context.js";
 
@@ -71,6 +71,7 @@ export default function Prompt({
               <>
                 <Text color={theme.muted}>↵</Text> send{"  "}
                 <Text color={theme.muted}>/</Text> commands{"  "}
+                <Text color={theme.muted}>⌘⌫</Text> clear{"  "}
                 <Text color={theme.muted}>esc</Text> quit
               </>
             )}
