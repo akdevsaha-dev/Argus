@@ -31,9 +31,11 @@ export default function Prompt({
         borderColor={busy ? theme.border : theme.accent}
         paddingX={1}
       >
-        <Text color={busy ? theme.subtle : theme.accent} bold>
-          {"› "}
-        </Text>
+        <Box flexShrink={0}>
+          <Text color={busy ? theme.subtle : theme.accent} bold>
+            {"› "}
+          </Text>
+        </Box>
         <TextInput
           value={value}
           onChange={onChange}
@@ -61,8 +63,8 @@ export default function Prompt({
           <Text color={theme.border}>tab to complete</Text>
         </Box>
       ) : (
-        <Box paddingX={2} justifyContent="space-between">
-          <Text color={theme.subtle}>
+        <Box paddingX={2} justifyContent="space-between" gap={2}>
+          <Text color={theme.subtle} wrap="truncate-end">
             {busy ? (
               <>
                 <Text color={theme.muted}>esc</Text> interrupt
@@ -76,12 +78,14 @@ export default function Prompt({
               </>
             )}
           </Text>
-          <Text color={theme.subtle}>
-            <Text color={busy ? theme.warning : theme.success}>●</Text>{" "}
-            {busy ? "working" : "ready"}
-            {terminalContext.branch && <Text color={theme.border}>{"  │  "}</Text>}
-            {terminalContext.branch && `⎇ ${terminalContext.branch}`}
-          </Text>
+          <Box flexShrink={0}>
+            <Text color={theme.subtle}>
+              <Text color={busy ? theme.warning : theme.success}>●</Text>{" "}
+              {busy ? "working" : "ready"}
+              {terminalContext.branch && <Text color={theme.border}>{"  │  "}</Text>}
+              {terminalContext.branch && `⎇ ${terminalContext.branch}`}
+            </Text>
+          </Box>
         </Box>
       )}
     </Box>
