@@ -1,6 +1,10 @@
 import { Type, type Tool } from "@google/genai";
 import path from "node:path";
 import fs from "fs/promises";
+import { promisify } from "node:util";
+import { exec } from "node:child_process";
+
+const execAsync = promisify(exec);
 export const tools: Tool[] = [
   {
     functionDeclarations: [
@@ -65,10 +69,26 @@ export const tools: Tool[] = [
           required: ["filePath", "oldText", "newText"],
         },
       },
+      {
+        name: "run_bash",
+        description:
+          "Run a shell command in the terminal (e.g. git status, npm test, tsc --noEmit)",
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            command: {
+              type: Type.STRING,
+              description: "The bash command to execute",
+            },
+          },
+          required: ["command"],
+        },
+      },
     ],
   },
 ];
 
+export const DANGEROUS_TOOLS = new Set(["edit_file", "run_bash"]);
 const IGNORED_DIR = new Set(["node_modules", ".git", "dist"]);
 
 export async function executeTool(name: string, args: any): Promise<string> {
@@ -111,8 +131,24 @@ export async function executeTool(name: string, args: any): Promise<string> {
       await fs.writeFile(targetFile, updated, "utf-8");
       return `Successfully updated ${args.filePath}`;
     }
+    if (name == "run_bash") {
+      const { stdout, stderr } = await execAsync(args.command, {
+        cwd: process.cwd(),
+        timeout: 90000,
+      });
+      const output = (stdout + "\n" + stderr).trim();
+
+      if (output.length > 6000) {
+        return output.slice(0, 6000) + "\n... (lol i am saving costs sorry.)";
+      }
+      return output || "(command completed with no output)";
+    }
     return `Unknown tool: ${name}`;
   } catch (err: any) {
-    return `Tool error: ${err.message}`;
+    const errorOutput = [err.stdout, err.stderr, err.message]
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+    return `Tool Error: ${errorOutput.slice(0, 4000)}`;
   }
 }

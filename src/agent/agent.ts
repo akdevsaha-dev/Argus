@@ -1,8 +1,10 @@
 import { GoogleGenAI, type Content } from "@google/genai";
 
-import { tools, executeTool } from "./tools.js";
+import { tools, executeTool, DANGEROUS_TOOLS } from "./tools.js";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+export const MODEL = "gemini-3.1-flash-lite";
 
 const history: Content[] = [];
 
@@ -21,6 +23,7 @@ export async function runAgent(
   userPrompt: string,
   onText: (text: string) => void,
   onToolStart: (name: string) => void,
+  onConfirmTool: (name: string, args: any) => Promise<any>,
   signal?: AbortSignal,
 ) {
   history.push({
@@ -31,7 +34,7 @@ export async function runAgent(
     if (signal?.aborted) return;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.1-flash-lite",
+      model: MODEL,
       contents: history,
       config: {
         systemInstruction: `
@@ -63,6 +66,19 @@ Be concise.
       if (signal?.aborted) return;
 
       const toolName = call.name!;
+
+      if (DANGEROUS_TOOLS.has(toolName)) {
+        const approved = await onConfirmTool(toolName, call.args);
+        if (!approved) {
+          toolOutputs.push({
+            functionResponse: {
+              name: toolName,
+              response: { result: "User denied permission to run this tool." },
+            },
+          });
+          continue;
+        }
+      }
       const argPreview = Object.values(call.args ?? {})[0] ?? "";
       onToolStart(argPreview ? `${toolName}(${argPreview})` : toolName);
 

@@ -1,10 +1,20 @@
-import React, { useRef, useState } from "react";
-import { Box, Static, useApp, useInput, useStdout } from "ink";
+import React, { useEffect, useRef, useState } from "react";
+import {
+  Box,
+  Text,
+  useApp,
+  useBoxMetrics,
+  useInput,
+  useWindowSize,
+  type DOMElement,
+} from "ink";
 import { resetHistory, runAgent } from "../agent/agent.js";
 import Banner from "./components/Banner.js";
 import Message, { type ChatMessage } from "./components/Message.js";
 import Thinking from "./components/Thinking.js";
 import Prompt, { type Command } from "./components/Prompt.js";
+import ConfirmTool from "./components/ConfirmTool.js";
+import { theme } from "./theme.js";
 
 const COMMANDS: Command[] = [
   { name: "/help", description: "Show available commands" },
@@ -16,7 +26,11 @@ const COMMANDS: Command[] = [
   },
 ];
 
-type StaticItem = { id: "banner" } | ChatMessage;
+interface PendingConfirm {
+  name: string;
+  args: Record<string, unknown> | undefined;
+  resolve: (approved: boolean) => void;
+}
 
 function addResponseDuration(messages: ChatMessage[], durationMs: number) {
   const updated = [...messages];
@@ -34,19 +48,42 @@ function addResponseDuration(messages: ChatMessage[], durationMs: number) {
 
 export default function App() {
   const { exit } = useApp();
-  const { write } = useStdout();
+  const { rows } = useWindowSize();
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isThinking, setIsThinking] = useState(false);
   const [activity, setActivity] = useState<string | null>(null);
-  const [outputVersion, setOutputVersion] = useState(0);
+  // Rows scrolled up from the bottom of the transcript; 0 follows new output.
+  const [scrollBack, setScrollBack] = useState(0);
   const [promptVersion, setPromptVersion] = useState(0);
+  // A tool call waiting for the user to allow or deny it.
+  const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
   const activeRequest = useRef<AbortController | null>(null);
   const nextMessageId = useRef(0);
   const inputRef = useRef(input);
   const thinkingRef = useRef(isThinking);
   inputRef.current = input;
   thinkingRef.current = isThinking;
+  const pendingConfirmRef = useRef(pendingConfirm);
+  pendingConfirmRef.current = pendingConfirm;
+
+  const viewportRef = useRef<DOMElement>(null);
+  const contentRef = useRef<DOMElement>(null);
+  const viewport = useBoxMetrics(viewportRef);
+  const content = useBoxMetrics(contentRef);
+  const maxScroll = Math.max(0, content.height - viewport.height);
+  // Before the first message, pin the welcome banner to the top.
+  const clampedScrollBack =
+    messages.length === 0 ? maxScroll : Math.min(scrollBack, maxScroll);
+
+  // Jump back to the latest output whenever something new is added.
+  useEffect(() => setScrollBack(0), [messages.length]);
+
+  function scrollBy(delta: number) {
+    setScrollBack((current) =>
+      Math.max(0, Math.min(maxScroll, Math.min(current, maxScroll) + delta)),
+    );
+  }
 
   function addMessage(role: ChatMessage["role"], content: string) {
     const message: ChatMessage = {
@@ -62,7 +99,20 @@ export default function App() {
       ? COMMANDS.filter((command) => command.name.startsWith(input))
       : [];
 
+  function answerConfirm(approved: boolean) {
+    const pending = pendingConfirmRef.current;
+    if (!pending) return;
+    pendingConfirmRef.current = null;
+    setPendingConfirm(null);
+    addMessage("system", `${approved ? "Allowed" : "Denied"} ${pending.name}.`);
+    pending.resolve(approved);
+  }
+
   function interrupt() {
+    // Settle any open prompt so the agent loop isn't left awaiting forever.
+    pendingConfirmRef.current?.resolve(false);
+    pendingConfirmRef.current = null;
+    setPendingConfirm(null);
     activeRequest.current?.abort();
     activeRequest.current = null;
     setIsThinking(false);
@@ -71,9 +121,7 @@ export default function App() {
   }
 
   function clearScreen() {
-    write("\x1b[2J\x1b[3J\x1b[H");
     setMessages([]);
-    setOutputVersion((version) => version + 1);
   }
 
   function runCommand(name: string) {
@@ -117,6 +165,11 @@ export default function App() {
           addMessage("assistant", reply);
         },
         (toolName) => setActivity(`Using ${toolName}`),
+        (name, args) =>
+          new Promise<boolean>((resolve) => {
+            setActivity(null);
+            setPendingConfirm({ name, args, resolve });
+          }),
         controller.signal,
       );
 
@@ -153,13 +206,26 @@ export default function App() {
     void sendMessage(text);
   }
 
-  useInput((_char, key) => {
+  useInput((char, key) => {
+    if (pendingConfirmRef.current) {
+      const answer = char.toLowerCase();
+      if (answer === "y") answerConfirm(true);
+      else if (answer === "n" || key.escape) answerConfirm(false);
+      return;
+    }
+
     if (key.escape) {
       if (thinkingRef.current) interrupt();
       else if (inputRef.current) setInput("");
       else exit();
       return;
     }
+
+    const page = Math.max(1, viewport.height - 2);
+    if (key.pageUp) return scrollBy(page);
+    if (key.pageDown) return scrollBy(-page);
+    if (key.upArrow) return scrollBy(1);
+    if (key.downArrow) return scrollBy(-1);
 
     const firstSuggestion = suggestions[0];
     if (key.tab && firstSuggestion) {
@@ -168,28 +234,55 @@ export default function App() {
     }
   });
 
-  const items: StaticItem[] = [{ id: "banner" }, ...messages];
-
   return (
-    <Box flexDirection="column" paddingX={1}>
-      <Static key={`output-${outputVersion}`} items={items}>
-        {(item) => (
-          <Box key={item.id} paddingX={1}>
-            {"role" in item ? <Message message={item} /> : <Banner />}
-          </Box>
+    <Box flexDirection="column" height={rows} paddingX={1}>
+      <Box
+        ref={viewportRef}
+        flexDirection="column"
+        flexGrow={1}
+        flexShrink={1}
+        overflow="hidden"
+        contentOffsetY={maxScroll - clampedScrollBack}
+      >
+        <Box ref={contentRef} flexDirection="column" flexShrink={0}>
+          <Banner />
+          {messages.map((message) => (
+            <Box key={message.id} paddingX={1}>
+              <Message message={message} />
+            </Box>
+          ))}
+        </Box>
+      </Box>
+
+      {messages.length > 0 && clampedScrollBack > 0 && (
+        <Box justifyContent="center" flexShrink={0}>
+          <Text color={theme.subtle}>
+            ↓ {clampedScrollBack} more line{clampedScrollBack === 1 ? "" : "s"}{" "}
+            · pgdn to jump down
+          </Text>
+        </Box>
+      )}
+
+      {isThinking && !pendingConfirm && (
+        <Box flexShrink={0}>
+          <Thinking label={activity ?? undefined} />
+        </Box>
+      )}
+
+      <Box flexShrink={0} flexDirection="column">
+        {pendingConfirm ? (
+          <ConfirmTool name={pendingConfirm.name} args={pendingConfirm.args} />
+        ) : (
+          <Prompt
+            key={`prompt-${promptVersion}`}
+            value={input}
+            onChange={setInput}
+            onSubmit={handleSubmit}
+            busy={isThinking}
+            suggestions={isThinking ? [] : suggestions}
+          />
         )}
-      </Static>
-
-      {isThinking && <Thinking label={activity ?? undefined} />}
-
-      <Prompt
-        key={`prompt-${promptVersion}`}
-        value={input}
-        onChange={setInput}
-        onSubmit={handleSubmit}
-        busy={isThinking}
-        suggestions={isThinking ? [] : suggestions}
-      />
+      </Box>
     </Box>
   );
 }
