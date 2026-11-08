@@ -22,3 +22,5 @@ Argus is a high-performance AI coding agent that runs directly in your terminal,
 
 ---
 *Developed as a sophisticated tool to automate and augment the software engineering lifecycle.*
+
+Made with <3 by Adi
