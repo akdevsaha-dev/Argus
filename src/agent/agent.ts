@@ -1,6 +1,7 @@
 import { GoogleGenAI, type Content } from "@google/genai";
-
+import fs from "fs/promises";
 import { tools, executeTool, DANGEROUS_TOOLS } from "./tools.js";
+import path from "path";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
@@ -19,6 +20,18 @@ export function resetHistory() {
   history.length = 0;
 }
 
+async function loadProjectContext(): Promise<string> {
+  const candidates = ["AGENT.md", "CLAUDE.md", "README.md"];
+  for (const filename of candidates) {
+    try {
+      const filePath = path.resolve(process.cwd(), filename);
+      const content = await fs.readFile(filePath, "utf-8");
+      return `\n\nProject Context (${filename}): \n${content.slice(0, 2000)}`;
+    } catch {}
+  }
+  return "";
+}
+
 export async function runAgent(
   userPrompt: string,
   onText: (text: string) => void,
@@ -32,7 +45,7 @@ export async function runAgent(
   });
   while (true) {
     if (signal?.aborted) return;
-
+    const projectContext = await loadProjectContext();
     const response = await ai.models.generateContent({
       model: MODEL,
       contents: history,
@@ -44,7 +57,8 @@ to save the changes to disk. Read existing files before editing them.
 Displaying file contents in your reply does not complete a file-writing request.
 Only report that a file was saved after the tool confirms success.
 If a tool fails, fix the issue or clearly report the failure.
-Be concise.
+Be concise. ${projectContext}
+
 `,
         tools: tools,
         abortSignal: signal,
