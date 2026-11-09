@@ -1,7 +1,8 @@
 import { GoogleGenAI, type Content } from "@google/genai";
 import fs from "fs/promises";
-import { tools, executeTool, DANGEROUS_TOOLS } from "./tools.js";
 import path from "path";
+
+import { tools, executeTool, DANGEROUS_TOOLS } from "./tools.js";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
@@ -20,14 +21,23 @@ export function resetHistory() {
   history.length = 0;
 }
 
+const PROJECT_CONTEXT_LIMIT = 2000;
+
 async function loadProjectContext(): Promise<string> {
   const candidates = ["AGENT.md", "CLAUDE.md", "README.md"];
   for (const filename of candidates) {
+    let content: string;
     try {
-      const filePath = path.resolve(process.cwd(), filename);
-      const content = await fs.readFile(filePath, "utf-8");
-      return `\n\nProject Context (${filename}): \n${content.slice(0, 2000)}`;
-    } catch {}
+      content = await fs.readFile(path.resolve(process.cwd(), filename), "utf-8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw err;
+    }
+    const truncated = content.length > PROJECT_CONTEXT_LIMIT;
+    const body = truncated
+      ? `${content.slice(0, PROJECT_CONTEXT_LIMIT)}\n[truncated]`
+      : content;
+    return `\n\n## Project context (${filename})\n${body}`;
   }
   return "";
 }
@@ -43,9 +53,10 @@ export async function runAgent(
     role: "user",
     parts: [{ text: userPrompt }],
   });
+  const projectContext = await loadProjectContext();
   while (true) {
     if (signal?.aborted) return;
-    const projectContext = await loadProjectContext();
+
     const response = await ai.models.generateContent({
       model: MODEL,
       contents: history,
@@ -57,8 +68,7 @@ to save the changes to disk. Read existing files before editing them.
 Displaying file contents in your reply does not complete a file-writing request.
 Only report that a file was saved after the tool confirms success.
 If a tool fails, fix the issue or clearly report the failure.
-Be concise. ${projectContext}
-
+Be concise.${projectContext}
 `,
         tools: tools,
         abortSignal: signal,
