@@ -23,12 +23,39 @@ export function resetHistory() {
 
 const PROJECT_CONTEXT_LIMIT = 2000;
 
+function pruneHistory(maxTurns: number = 20) {
+  if (history.length <= maxTurns) return;
+
+  const firstTurn = history[0];
+
+  const recentTurns = history.slice(-(maxTurns - 6));
+
+  history.length = 0;
+  history.push(firstTurn);
+  history.push({
+    role: "user",
+    parts: [
+      {
+        text: "Earlier intermediate tool calls were pruned to preserve context space",
+      },
+    ],
+  });
+  history.push({
+    role: "model",
+    parts: [{ text: "Understood. Continuing with recent context." }],
+  });
+  history.push(...recentTurns);
+}
+
 async function loadProjectContext(): Promise<string> {
   const candidates = ["AGENT.md", "CLAUDE.md", "README.md"];
   for (const filename of candidates) {
     let content: string;
     try {
-      content = await fs.readFile(path.resolve(process.cwd(), filename), "utf-8");
+      content = await fs.readFile(
+        path.resolve(process.cwd(), filename),
+        "utf-8",
+      );
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
       throw err;
@@ -56,7 +83,7 @@ export async function runAgent(
   const projectContext = await loadProjectContext();
   while (true) {
     if (signal?.aborted) return;
-
+    pruneHistory();
     const response = await ai.models.generateContent({
       model: MODEL,
       contents: history,
